@@ -1,0 +1,86 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (matches request.auth.uid)
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional, uri format)
+    //   - role: string (required, ['user', 'admin'])
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: analysis_history
+    // Document ID: {historyId}
+    // Fields:
+    //   - uid: string (required, matches request.auth.uid)
+    //   - timestamp: timestamp (required)
+    //   - report: map (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Domain Validators
+    function isValidUser(data) {
+      return data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             data.role in ['user', 'admin'] &&
+             data.uid.size() < 128 &&
+             data.email.size() < 256;
+    }
+
+    function isValidAnalysis(data) {
+      return data.uid == request.auth.uid &&
+             data.timestamp is timestamp &&
+             data.report is map;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // User Profiles: Strictly private
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'user';
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role;
+    }
+
+    // Analysis History: Owner only
+    match /analysis_history/{historyId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid && isValidAnalysis(request.resource.data);
+      allow delete: if isDocOwner();
+    }
+  }
+}
